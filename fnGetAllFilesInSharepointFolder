@@ -1,0 +1,79 @@
+let
+    fnGetAllFilesInSharepointFolder = (RootPath as text, FullPath as text) as table =>
+
+    let
+        // Helper function to decode URI strings
+        fnUriUnescapeString = (data as text) as text =>
+            let
+                ToList = List.Buffer(Text.ToList(data)),
+                Accumulate = List.Accumulate(
+                    ToList,
+                    [Hex = null, Bytes = {}],
+                    (state, current) =>
+                        if Record.HasFields(state, "Hex") and state[Hex] <> null then
+                            if Text.Length(state[Hex] & current) = 2 then
+                                [
+                                    Hex = null,
+                                    Bytes = state[Bytes] & Binary.ToList(Binary.FromText(state[Hex] & current, BinaryEncoding.Hex))
+                                ]
+                            else
+                                [Hex = state[Hex] & current, Bytes = state[Bytes]]
+                        else if current = "%" then
+                            [Hex = "", Bytes = state[Bytes]]
+                        else
+                            [Hex = null, Bytes = state[Bytes] & {Character.ToNumber(current)}]
+                ),
+                FromBinary = Text.FromBinary(Binary.FromList(Accumulate[Bytes]))
+            in
+                FromBinary,
+
+        StaticRoot = SharePoint.Contents(RootPath, [ApiVersion = 15]),
+        ExtractRoot = fnUriUnescapeString(Text.BeforeDelimiter(FullPath, "/", 4)),
+        RelativePath = fnUriUnescapeString(Text.AfterDelimiter(FullPath, ExtractRoot)),
+        SubfoldersList = List.Buffer(List.Select(Text.Split(RelativePath, "/"), each _ <> null and _ <> "")),
+
+        NavigateToFolder = List.Accumulate(
+            SubfoldersList,
+            StaticRoot,
+            (state, current) => state{[Name = current]}[Content]
+        ),
+
+        GetAllFiles = (Folder as table, Path as text) as table =>
+            let
+                Files = Table.SelectRows(Folder, each [Content] is binary),
+                FilesWithPath = Table.AddColumn(Files, "SubFolder", each Path),
+
+                Subfolders = Table.SelectRows(Folder, each [Content] is table),
+                SubfolderResults = Table.Combine(
+                    List.Transform(
+                        Table.ToRecords(Subfolders),
+                        (subfolder) => @GetAllFiles(subfolder[Content], Path & "/" & subfolder[Name])
+                    )
+                ),
+
+                CombinedResults = Table.Combine({FilesWithPath, SubfolderResults})
+            in
+                CombinedResults,
+
+        FinalResults = @GetAllFiles(NavigateToFolder, RelativePath),
+
+        // Clean up results
+        AddFileName = Table.AddColumn(FinalResults, "FileName", each [Name]),
+        RemoveUnusedColumns = Table.SelectColumns(AddFileName, {"FileName", "Extension", "SubFolder", "Content"})
+
+    in
+        RemoveUnusedColumns,
+
+    documentation = [
+        Documentation.Name = "SharePoint.GetAllFilesInFolder",
+        Documentation.Description = "Imports all files from a SharePoint folder including subfolders.",
+        Documentation.LongDescription = "Imports all files from a SharePoint folder including subfolders. Root path to SharePoint must be provided as input.",
+        Documentation.Category = "Accessing Data Functions",
+        Documentation.Source = "www.TheBIccountant.com",
+        Documentation.Version = "1.5 - RootPath Input Parameter",
+        Documentation.Author = "Imke Feldmann",
+        Documentation.Examples = {[Description = "", Code = "", Result = ""]}
+    ]
+
+in
+    Value.ReplaceType(fnGetAllFilesInSharepointFolder, Value.ReplaceMetadata(Value.Type(fnGetAllFilesInSharepointFolder), documentation))
