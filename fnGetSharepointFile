@@ -1,0 +1,62 @@
+// fnGetSharepointFile
+let
+    fnGetSharepointFile = (RootPath as text, FullPath as text) as binary =>
+
+    let
+        // Helper function to decode URI strings
+        fnUriUnescapeString = (data as text) as text =>
+            let
+                ToList = List.Buffer(Text.ToList(data)),
+                Accumulate = List.Accumulate(
+                    ToList,
+                    [Hex = null, Bytes = {}],
+                    (state, current) =>
+                        if Record.HasFields(state, "Hex") and state[Hex] <> null then
+                            if Text.Length(state[Hex] & current) = 2 then
+                                [
+                                    Hex = null,
+                                    Bytes = state[Bytes] & Binary.ToList(Binary.FromText(state[Hex] & current, BinaryEncoding.Hex))
+                                ]
+                            else
+                                [Hex = state[Hex] & current, Bytes = state[Bytes]]
+                        else if current = "%" then
+                            [Hex = "", Bytes = state[Bytes]]
+                        else
+                            [Hex = null, Bytes = state[Bytes] & {Character.ToNumber(current)}]
+                ),
+                FromBinary = Text.FromBinary(Binary.FromList(Accumulate[Bytes]))
+            in
+                FromBinary,
+
+        StaticRoot = SharePoint.Contents(RootPath, [ApiVersion = 15]),
+        ExtractRoot = fnUriUnescapeString(Text.BeforeDelimiter(FullPath, "/", 4)),
+        RelativePath = fnUriUnescapeString(Text.AfterDelimiter(FullPath, ExtractRoot)),
+        PathParts = List.Buffer(List.Select(Text.Split(RelativePath, "/"), each _ <> null and _ <> "")),
+
+        FileName = List.Last(PathParts),
+        SubfoldersList = List.RemoveLastN(PathParts, 1),
+
+        NavigateToFolder = List.Accumulate(
+            SubfoldersList,
+            StaticRoot,
+            (state, current) => state{[Name = current]}[Content]
+        ),
+
+        FileContent = Table.SelectRows(NavigateToFolder, each [Name] = FileName and [Content] is binary){0}[Content]
+
+    in
+        FileContent,
+
+    documentation = [
+        Documentation.Name = "SharePoint.GetFile",
+        Documentation.Description = "Retrieves a single file from SharePoint by providing root path and full URL.",
+        Documentation.LongDescription = "Retrieves a single file from SharePoint by providing the root site URL and the full path to the specific file.",
+        Documentation.Category = "Accessing Data Functions",
+        Documentation.Source = "www.TheBIccountant.com",
+        Documentation.Version = "1.3 - Aligned with Folder Retrieval Function",
+        Documentation.Author = "Imke Feldmann",
+        Documentation.Examples = {[Description = "", Code = "", Result = ""]}
+    ]
+
+in
+    Value.ReplaceType(fnGetSharepointFile, Value.ReplaceMetadata(Value.Type(fnGetSharepointFile), documentation))
